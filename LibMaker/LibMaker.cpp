@@ -1673,7 +1673,7 @@ LSTATUS CopyLibType(LPCWSTR szLibFile, LPCWSTR szDesLibFile)
 
 
 		auto SymbolName = StrTable;
-		for (int i = 0; i != ObjNum; ++i, SymbolName += strlen(SymbolName) + 1)
+		for (int i = 0; i != SymbolNum; ++i, SymbolName += strlen(SymbolName) + 1)
 		{
 			auto ObjHeader = (SectionHeader*)(pData + ObjOffsets[SymbolIdx[i] - 1]);
 
