@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 16
-VisualStudioVersion = 16.0.32002.261
+# Visual Studio Version 17
+VisualStudioVersion = 17.10.34916.146
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "LibMaker", "LibMaker\LibMaker.vcxproj", "{30715830-71CE-4CE8-AB47-63AF621B4B07}"
 EndProject
@@ -11,14 +11,6 @@ Global
 		Debug|x86 = Debug|x86
 		Release|x64 = Release|x64
 		Release|x86 = Release|x86
-		v140|x64 = v140|x64
-		v140|x86 = v140|x86
-		v140xp|x64 = v140xp|x64
-		v140xp|x86 = v140xp|x86
-		v141|x64 = v141|x64
-		v141|x86 = v141|x86
-		v141xp|x64 = v141xp|x64
-		v141xp|x86 = v141xp|x86
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{30715830-71CE-4CE8-AB47-63AF621B4B07}.Debug|x64.ActiveCfg = Debug|x64
@@ -29,22 +21,6 @@ Global
 		{30715830-71CE-4CE8-AB47-63AF621B4B07}.Release|x64.Build.0 = Release|x64
 		{30715830-71CE-4CE8-AB47-63AF621B4B07}.Release|x86.ActiveCfg = Release|Win32
 		{30715830-71CE-4CE8-AB47-63AF621B4B07}.Release|x86.Build.0 = Release|Win32
-		{30715830-71CE-4CE8-AB47-63AF621B4B07}.v140|x64.ActiveCfg = Release|x64
-		{30715830-71CE-4CE8-AB47-63AF621B4B07}.v140|x64.Build.0 = Release|x64
-		{30715830-71CE-4CE8-AB47-63AF621B4B07}.v140|x86.ActiveCfg = Release|Win32
-		{30715830-71CE-4CE8-AB47-63AF621B4B07}.v140|x86.Build.0 = Release|Win32
-		{30715830-71CE-4CE8-AB47-63AF621B4B07}.v140xp|x64.ActiveCfg = Debug|Win32
-		{30715830-71CE-4CE8-AB47-63AF621B4B07}.v140xp|x64.Build.0 = Debug|Win32
-		{30715830-71CE-4CE8-AB47-63AF621B4B07}.v140xp|x86.ActiveCfg = Debug|Win32
-		{30715830-71CE-4CE8-AB47-63AF621B4B07}.v140xp|x86.Build.0 = Debug|Win32
-		{30715830-71CE-4CE8-AB47-63AF621B4B07}.v141|x64.ActiveCfg = Release|x64
-		{30715830-71CE-4CE8-AB47-63AF621B4B07}.v141|x64.Build.0 = Release|x64
-		{30715830-71CE-4CE8-AB47-63AF621B4B07}.v141|x86.ActiveCfg = Release|Win32
-		{30715830-71CE-4CE8-AB47-63AF621B4B07}.v141|x86.Build.0 = Release|Win32
-		{30715830-71CE-4CE8-AB47-63AF621B4B07}.v141xp|x64.ActiveCfg = Release|x64
-		{30715830-71CE-4CE8-AB47-63AF621B4B07}.v141xp|x64.Build.0 = Release|x64
-		{30715830-71CE-4CE8-AB47-63AF621B4B07}.v141xp|x86.ActiveCfg = Debug|Win32
-		{30715830-71CE-4CE8-AB47-63AF621B4B07}.v141xp|x86.Build.0 = Debug|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

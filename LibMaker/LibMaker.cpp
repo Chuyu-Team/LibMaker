@@ -7,6 +7,21 @@
 #include <map>
 #include <winnt.h>
 
+#include "TaskRunner.h"
+
+CStringA g_szPrefix;
+bool g_bSupportApiSet = false;
+thread_local bool g_UsingPrefixWhenCreateWeak = true;
+
+enum class SymbolFlags
+{
+	None = 0,
+	Data = 0x00000001,
+	NoImp = 0x00000002,
+	NoPrefix = 0x00000004,
+};
+
+YY_APPLY_ENUM_CALSS_BIT_OPERATOR(SymbolFlags);
 
 BOOL GetLine(LPCWSTR& Text, CString& Str)
 {
@@ -89,7 +104,7 @@ int MakeBuild()
 
 	fclose(file);
 
-	int iyyyy = 000;
+	return 0;
 }
 
 
@@ -153,7 +168,7 @@ int FindSymbol()
 
 	fclose(file);
 
-	int iyyyy = 000;
+	return 0;
 }
 #include <string>
 #include <sys/stat.h>
@@ -171,6 +186,7 @@ BOOL BuildCheckSum(void* pBase, DWORD Size);
 
 LSTATUS ExportObj(LPCWSTR szLibFile, LPCWSTR szObjFile, LPCWSTR szOutPath);
 
+HRESULT BuildYY_ThunksLibraries2(CStringW _szYY_ThunksFilePath, CStringW _szSDK_DirPath, CStringW _szOutputDirPath);
 
 void AddSymbol(CStringA Name,CStringA Value,std::map<CStringA, DWORD>& IndexMap, std::vector<IMAGE_SYMBOL>& Symbols, std::string& StringTable)
 {
@@ -387,6 +403,9 @@ LSTATUS CreateWeakObj(WORD Machine, LPCWSTR Names, std::string& Buffer)
 		{
 			auto& Symbol = TTTT[i];
 
+			// 过滤纯声明
+			if (Symbol.Type == IMAGE_SYM_TYPE_NULL && Symbol.SectionNumber == 0 && Symbol.StorageClass == IMAGE_SYM_CLASS_EXTERNAL)
+				continue;
 			//是一个声明
 			if (Symbol.StorageClass == IMAGE_SYM_CLASS_EXTERNAL)
 			{
@@ -465,31 +484,30 @@ LSTATUS CreateWeakObj(WORD Machine, LPCWSTR Names, std::string& Buffer)
 		if(pNumArgs==0)
 			return ERROR_INVALID_PARAMETER;
 
-		DWORD Flags = 0;
 
-		CStringA szName(Name, Values - Name - 1);
-		CStringA szValue(pValues[0]);
+		SymbolFlags Flags = SymbolFlags::None;
 
-		if (NamePrefix)
-		{
-			if(szName[0] != '?')
-				szName.Insert(0,NamePrefix);
-
-			if(szValue[0]!='?')
-				szValue.Insert(0, NamePrefix);
-		}
+		CStringA szName;
 		
+		if(g_UsingPrefixWhenCreateWeak)
+			szName = g_szPrefix;
+		szName += CStringA(Name, Values - Name - 1);
+		CStringA szValue(pValues[0]);
 
 		for (int i = 1; i != pNumArgs; ++i)
 		{
 			if (_wcsicmp(pValues[i], L"DATA") == 0)
 			{
-				Flags |= 0x1;
+				Flags |= SymbolFlags::Data;
 
 			}
 			else if (_wcsicmp(pValues[i], L"NoImp") == 0)
 			{
-				Flags |= 0x2;
+				Flags |= SymbolFlags::NoImp;
+			}
+			else if (_wcsicmp(pValues[i], L"NoPrefix") == 0)
+			{
+				Flags |= SymbolFlags::NoPrefix;
 			}
 			else
 			{
@@ -497,18 +515,27 @@ LSTATUS CreateWeakObj(WORD Machine, LPCWSTR Names, std::string& Buffer)
 			}
 		}
 
-		if ((Flags & 0x3) == 0x3)
+		if (NamePrefix && HasFlags(Flags, SymbolFlags::NoPrefix) == false)
+		{
+			if (szName[0] != '?')
+				szName.Insert(0, NamePrefix);
+
+			if (szValue[0] != '?')
+				szValue.Insert(0, NamePrefix);
+		}
+
+		if ((Flags & (SymbolFlags::Data | SymbolFlags::NoImp)) == (SymbolFlags::Data | SymbolFlags::NoImp))
 		{
 			return ERROR_INVALID_PARAMETER;
 		}
 
-		if ((Flags & 0x1) == 0)
+		if (!HasFlags(Flags, SymbolFlags::Data))
 		{
 			if(ObjOldNamesMap.find(szName) == ObjOldNamesMap.end())
 				AddSymbol(szName, szValue, IndexMap, Symbols, StringTable);
 		}
 
-		if ((Flags & 0x2) == 0)
+		if (!HasFlags(Flags, SymbolFlags::NoImp))
 		{
 			auto szNameIMP = "__imp_" + szName;
 			auto szValueIMP = "__imp_" + szValue;
@@ -608,6 +635,8 @@ LSTATUS AppendWeakObj(WORD Machine, LPCWSTR Names, LPCWSTR ObjPath)
 		DWORD cbWrite;
 
 		WriteFile(hFile, Buffer.data(), Buffer.size(), &cbWrite, nullptr);
+
+		SetEndOfFile(hFile);
 	}
 
 	CloseHandle(hFile);
@@ -624,6 +653,7 @@ LSTATUS CreateWeakObjs(WORD Machine, LPCWSTR Names, CString ObjRootPath)
 	if (ObjRootPath[ObjRootPath.GetLength() - 1] != L'\\')
 		ObjRootPath += L'\\';
 
+	CreateRoot(ObjRootPath);
 
 	std::set<CString> IndexMap;
 
@@ -643,7 +673,7 @@ LSTATUS CreateWeakObjs(WORD Machine, LPCWSTR Names, CString ObjRootPath)
 		if (pNumArgs == 0)
 			return ERROR_INVALID_PARAMETER;
 
-		DWORD Flags = 0;
+		SymbolFlags Flags = SymbolFlags::None;
 
 		CString szName(Name, Values - Name - 1);
 
@@ -661,12 +691,15 @@ LSTATUS CreateWeakObjs(WORD Machine, LPCWSTR Names, CString ObjRootPath)
 		{
 			if (_wcsicmp(pValues[i], L"DATA") == 0)
 			{
-				Flags |= 0x1;
-
+				Flags |= SymbolFlags::Data;
 			}
 			else if (_wcsicmp(pValues[i], L"NoImp") == 0)
 			{
-				Flags |= 0x2;
+				Flags |= SymbolFlags::NoImp;
+			}
+			else if (_wcsicmp(pValues[i], L"NoPrefix") == 0)
+			{
+				Flags |= SymbolFlags::NoPrefix;
 			}
 			else
 			{
@@ -674,7 +707,7 @@ LSTATUS CreateWeakObjs(WORD Machine, LPCWSTR Names, CString ObjRootPath)
 			}
 		}
 
-		if ((Flags & 0x3) == 0x3)
+		if ((Flags & (SymbolFlags::Data | SymbolFlags::NoImp)) == (SymbolFlags::Data | SymbolFlags::NoImp))
 		{
 			return ERROR_INVALID_PARAMETER;
 		}
@@ -683,9 +716,14 @@ LSTATUS CreateWeakObjs(WORD Machine, LPCWSTR Names, CString ObjRootPath)
 		auto SaveName = ObjRootPath + szName;
 		SaveName.Replace(L'?', L'^');
 
-		if ((Flags & 0x1) == 0)
+		if (!HasFlags(Flags, SymbolFlags::Data))
 		{
 			auto szItem = szName + L"=" + pValues[0] +L" NoImp";
+			if (HasFlags(Flags, SymbolFlags::NoPrefix))
+			{
+				szItem += L" NoPrefix";
+			}
+
 			szItem.AppendChar(L'\0');
 
 			auto lStatus = CreateWeakObj(Machine, szItem, SaveName + L".obj");
@@ -695,9 +733,13 @@ LSTATUS CreateWeakObjs(WORD Machine, LPCWSTR Names, CString ObjRootPath)
 
 		}
 
-		if ((Flags & 0x2) == 0)
+		if (!HasFlags(Flags, SymbolFlags::NoImp))
 		{
 			auto szItem = szName + L"=" + pValues[0] + L" DATA";
+			if (HasFlags(Flags, SymbolFlags::NoPrefix))
+			{
+				szItem += L" NoPrefix";
+			}
 			szItem.AppendChar(L'\0');
 
 			auto lStatus = CreateWeakObj(Machine, szItem, SaveName + L".obi");
@@ -1034,31 +1076,41 @@ struct SecondSec
 };
 
 
-byte* ReadFileData(LPCWSTR szFile)
+CStringA ReadFileData(LPCWSTR szFile)
 {
 	CHFile hFile = CreateFileW(szFile, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
 	if (hFile.IsInvalid())
-		return nullptr;
+		return CStringA();
 
+
+	CStringA _Data;
 	DWORD cbData = GetFileSize(hFile, nullptr);
-	auto pData = (byte*)malloc(cbData);
+	ReadFile(hFile, _Data.GetBufferSetLength(cbData), cbData, &cbData, nullptr);
+	return _Data;
+}
 
-	ReadFile(hFile, pData, cbData, &cbData, nullptr);
+HRESULT WriteFileData(LPCWSTR szFile, const void* _pData, DWORD _cbData)
+{
+	auto _hFile = CreateFileW(szFile, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (_hFile == INVALID_HANDLE_VALUE)
+	{
+		auto _hr = __HRESULT_FROM_WIN32(GetLastError());
+		wprintf(L"错误：无法创建文件 %s, hr=0x%.8X\n", szFile, _hr);
+		return _hr;
+	}
 
-	return pData;
+	WriteFile(_hFile, _pData, _cbData, &_cbData, nullptr);
+	CloseHandle(_hFile);
+	return S_OK;
 }
 
 void GetDllExports(LPCWSTR szFile, std::set<CStringA>& ProcNames/*, std::set<DWORD>& Ordinal*/)
 {
-	auto pDll = ReadFileData(szFile);
-	if (!pDll)
+	auto _Dll = ReadFileData(szFile);
+	if (_Dll.IsEmpty())
 		return;
 
-	RunOnExit([pDll]()
-	{
-		free(pDll);
-	});
-
+	auto pDll = (BYTE*)_Dll.GetBuffer();
 	auto pDllNtHeader = RtlImageNtHeader(pDll);
 
 	if (!pDllNtHeader)
@@ -1104,8 +1156,9 @@ void GetDllExports(LPCWSTR szFile, std::set<CStringA>& ProcNames/*, std::set<DWO
 
 LSTATUS RenameLib(LPCWSTR szLibFile, WORD Machine, LPCWSTR szDefPath, LPCSTR szDllName, LPCSTR szNewDllName)
 {
-	auto pData = ReadFileData(szLibFile);
+	auto Data = ReadFileData(szLibFile);
 
+	auto pData = Data.GetString();
 	if (memcmp(pData, IMAGE_ARCHIVE_START, IMAGE_ARCHIVE_START_SIZE)!=0)
 		return ERROR_BAD_FORMAT;
 
@@ -1398,7 +1451,7 @@ LSTATUS RenameLib(LPCWSTR szLibFile, WORD Machine, LPCWSTR szDefPath, LPCSTR szD
 	}
 
 
-	CreateFileByData(szLibFile, pData, _msize(pData));
+	CreateFileByData(szLibFile, pData, Data.GetLength());
 
 	return ERROR_SUCCESS;
 }
@@ -1406,8 +1459,8 @@ LSTATUS RenameLib(LPCWSTR szLibFile, WORD Machine, LPCWSTR szDefPath, LPCSTR szD
 
 LSTATUS RemoveAllObj(LPCWSTR szLibFile)
 {
-	auto pData = ReadFileData(szLibFile);
-
+	auto Data = ReadFileData(szLibFile);
+	auto pData = Data.GetString();
 	if (memcmp(pData, "!<arch>\n", StaticStrLen("!<arch>\n")) != 0)
 		return ERROR_BAD_FORMAT;
 
@@ -1482,8 +1535,8 @@ LSTATUS FixObj(LPCWSTR szObjFile, const std::map<CStringA, DWORD>& WeakExternets
 
 LSTATUS ExportDef(LPCWSTR szLibFile, WORD Machine, LPCWSTR szDefPath)
 {
-	auto pData = ReadFileData(szLibFile);
-
+	auto Data = ReadFileData(szLibFile);
+	auto pData = Data.GetString();
 	if (memcmp(pData, IMAGE_ARCHIVE_START, IMAGE_ARCHIVE_START_SIZE) != 0)
 		return ERROR_BAD_FORMAT;
 
@@ -1611,11 +1664,12 @@ LSTATUS ExportDef(LPCWSTR szLibFile, WORD Machine, LPCWSTR szDefPath)
 
 LSTATUS CopyLibType(LPCWSTR szLibFile, LPCWSTR szDesLibFile)
 {
-	auto pData = ReadFileData(szLibFile);
+	auto Data = ReadFileData(szLibFile);
 
-	if (!pData)
+	if (Data.IsEmpty())
 		return ERROR_FILE_INVALID;
 
+	auto pData = Data.GetString();
 	if (memcmp(pData, IMAGE_ARCHIVE_START, IMAGE_ARCHIVE_START_SIZE) != 0)
 		return ERROR_BAD_FORMAT;
 
@@ -1654,8 +1708,8 @@ LSTATUS CopyLibType(LPCWSTR szLibFile, LPCWSTR szDesLibFile)
 
 	bool bChange = false;
 	{
-		auto pData = ReadFileData(szDesLibFile);
-
+		auto Data = ReadFileData(szDesLibFile);
+		auto pData = Data.GetString();
 		if (memcmp(pData, IMAGE_ARCHIVE_START, IMAGE_ARCHIVE_START_SIZE) != 0)
 			return ERROR_BAD_FORMAT;
 
@@ -1704,7 +1758,7 @@ LSTATUS CopyLibType(LPCWSTR szLibFile, LPCWSTR szDesLibFile)
 	if (!bChange)
 		return ERROR_SUCCESS;
 
-	return CreateFileByData(szLibFile, pData, _msize(pData));
+	return CreateFileByData(szLibFile, Data.GetString(), Data.GetLength());
 }
 
 int _tmain(int argc, _TCHAR* argv[])
@@ -1754,15 +1808,15 @@ int _tmain(int argc, _TCHAR* argv[])
 		}
 		else if (StrCmpI(argv[i], _T("CreateWeak"))==0)
 		{
-			return CreateWeakObj(argc - 1, argv + 1);
+			return CreateWeakObj(argc - i, argv + i);
 		}
 		else if (StrCmpI(argv[i], _T("AppendWeak")) == 0)
 		{
-			return CreateWeakObj(argc - 1, argv + 1, CreateWeakObjFlagAppend);
+			return CreateWeakObj(argc - i, argv + i, CreateWeakObjFlagAppend);
 		}
 		else if (StrCmpI(argv[i], _T("CreateWeaks")) == 0)
 		{
-			return CreateWeakObj(argc - 1, argv + 1, CreateWeakObjFlagObjs);
+			return CreateWeakObj(argc - i, argv + i, CreateWeakObjFlagObjs);
 		}
 		else if (StrCmpI(argv[i], _T("RemoveAllObj")) == 0)
 		{
@@ -1869,11 +1923,25 @@ int _tmain(int argc, _TCHAR* argv[])
 		{
 			return ExportObj(argv[i + 1], argv[i + 2], argv[i + 3]);
 		}
+		else if (StrCmpI(argv[i], _T("BuildYY_ThunksLibraries")) == 0)
+		{
+			return BuildYY_ThunksLibraries2(argv[i + 1], argv[i + 2], argv[i + 3]);
+		}
+		else if (StrCmpNI(argv[i], L"/PREFIX:", StaticStrLen(L"/PREFIX:")) == 0)
+		{
+			auto _szPrefix = argv[i] + StaticStrLen(L"/PREFIX:");
+
+			PathUnquoteSpaces(_szPrefix);
+			g_szPrefix = _szPrefix;
+		}
+		else if (StrCmpI(argv[i], L"/SupportApiSet") == 0)
+		{
+			g_bSupportApiSet = true;
+		}
 		else
 		{
 			break;
 		}
-
 	}
 
 
@@ -2213,15 +2281,11 @@ LSTATUS FixObj(LPCWSTR szObjFile,const std::map<CStringA,DWORD>& WeakExternets)
 
 LSTATUS RemoveAPISet(LPCWSTR szBinFile, LPCWSTR szAPISetMap)
 {
-	auto pBase = ReadFileData(szBinFile);
-	if (!pBase)
+	auto Base = ReadFileData(szBinFile);
+	if (Base.IsEmpty())
 		return ERROR_INVALID_DATA;
 
-	RunOnExit([pBase]()
-	{
-		free(pBase);
-	});
-
+	auto pBase = Base.GetBuffer();
 
 	auto pNtHeader = RtlImageNtHeader((PVOID)pBase);
 
@@ -2350,7 +2414,7 @@ LSTATUS RemoveAPISet(LPCWSTR szBinFile, LPCWSTR szAPISetMap)
 
 	if (bChange)
 	{
-		DWORD NewFileSize = _msize(pBase);
+		DWORD NewFileSize = Base.GetLength();
 		do
 		{
 			auto& Imort = pDirectorys[IMAGE_DIRECTORY_ENTRY_SECURITY];
@@ -2394,14 +2458,11 @@ LSTATUS RemoveAPISet(LPCWSTR szBinFile, LPCWSTR szAPISetMap)
 //删除微软代码签名
 LSTATUS RemoveMSSign(LPCWSTR szBinFile)
 {
-	auto pBase = ReadFileData(szBinFile);
-	if (!pBase)
+	auto Base = ReadFileData(szBinFile);
+	if (Base.IsEmpty())
 		return ERROR_INVALID_DATA;
 
-	RunOnExit([pBase]()
-		{
-			free(pBase);
-		});
+	auto pBase = Base.GetBuffer();
 
 
 	auto pNtHeader = RtlImageNtHeader((PVOID)pBase);
@@ -2425,7 +2486,7 @@ LSTATUS RemoveMSSign(LPCWSTR szBinFile)
 
 		auto NewFileSize = Imort.VirtualAddress;
 
-		if (_msize(pBase) < NewFileSize)
+		if (Base.GetLength() < NewFileSize)
 		{
 			wprintf(L"Error：实际的数据大小小于签名末尾。\n");
 			return ERROR_INVALID_DATA;
@@ -2520,11 +2581,12 @@ LSTATUS ExportObj(LPCWSTR szLibFile, LPCWSTR szObjFile, LPCWSTR szOutPath)
 
 	const auto cchszObjFileNameANSI =  szObjFileNameANSI.GetLength();
 
-	auto pData = ReadFileData(szLibFile);
+	auto Data = ReadFileData(szLibFile);
 
-	if (!pData)
+	if (Data.IsEmpty())
 		return ERROR_FILE_INVALID;
 
+	auto pData = Data.GetString();
 	if (memcmp(pData, IMAGE_ARCHIVE_START, IMAGE_ARCHIVE_START_SIZE) != 0)
 		return ERROR_BAD_FORMAT;
 
@@ -2577,4 +2639,703 @@ LSTATUS ExportObj(LPCWSTR szLibFile, LPCWSTR szObjFile, LPCWSTR szOutPath)
 
 
 	return ERROR_FILE_NOT_FOUND;
+}
+
+WORD GetObjThunkSymbols(CStringW _szYY_ThunksFilePath, std::map<CStringA, bool>& _DefSymbols)
+{
+	auto Data = ReadFileData(_szYY_ThunksFilePath);
+	if (Data.IsEmpty())
+		return 0;
+
+	auto pData = Data.GetString();
+
+	auto tttt = (IMAGE_FILE_HEADER*)pData;
+
+	auto TTT2 = (IMAGE_SECTION_HEADER*)(pData + sizeof(IMAGE_FILE_HEADER));
+
+	auto TTTT = (IMAGE_SYMBOL*)((byte*)pData + tttt->PointerToSymbolTable);
+
+
+	auto pStringTable = (char*)TTTT + tttt->NumberOfSymbols * sizeof(IMAGE_SYMBOL);
+	auto cbStringTable = *(DWORD*)pStringTable;
+
+	for (int i = 0; i != tttt->NumberOfSymbols; ++i)
+	{
+		auto& Symbol = TTTT[i];
+
+		//是一个声明
+		if (Symbol.StorageClass == IMAGE_SYM_CLASS_EXTERNAL || Symbol.StorageClass == IMAGE_SYM_CLASS_WEAK_EXTERNAL)
+		{
+			CStringA _szName;
+			//长度明显大于8，肯定是个长命名
+			if (Symbol.N.Name.Short == 0)
+			{
+				_szName = pStringTable + Symbol.N.Name.Long;
+			}
+			else
+			{
+				_szName = CStringA((char*)Symbol.N.ShortName, strnlen((char*)Symbol.N.ShortName, _countof(Symbol.N.ShortName)));
+			}
+
+			// 过滤掉纯声明
+			if (Symbol.Type == IMAGE_SYM_TYPE_NULL && Symbol.SectionNumber == 0 && Symbol.StorageClass == IMAGE_SYM_CLASS_EXTERNAL)
+				continue;
+
+			if (_szName.IsEmpty())
+				continue;
+			auto _szBuffer = _szName.GetString();
+			if (strncmp(_szBuffer, "__imp_", 6) != 0)
+			{
+				continue;
+			}
+			_szBuffer += 6;
+
+
+			CStringA _szSymbolName;
+
+			if (tttt->Machine == IMAGE_FILE_MACHINE_I386 && *_szBuffer == '_')
+			{
+				++_szBuffer;
+				if (strncmp(_szBuffer, g_szPrefix.GetString(), g_szPrefix.GetLength()) != 0)
+				{
+					continue;
+				}
+
+				_szSymbolName += '_';
+				_szSymbolName += (_szBuffer + g_szPrefix.GetLength());
+			}
+			else
+			{
+				if (strncmp(_szBuffer, g_szPrefix.GetString(), g_szPrefix.GetLength()) != 0)
+				{
+					continue;
+				}
+
+				_szSymbolName = (_szBuffer + g_szPrefix.GetLength());
+			}
+
+			_DefSymbols[_szSymbolName] = false;
+		}
+	}
+
+	return tttt->Machine;
+}
+
+struct LibItem
+{
+	CStringA szDllName;
+	IMPORT_OBJECT_NAME_TYPE NameType = IMPORT_OBJECT_NAME_TYPE::IMPORT_OBJECT_NAME;
+	// IMPORT_OBJECT_ORDINAL时 Ordinal有效
+	int Ordinal = -1;
+};
+
+struct Lib
+{
+	CStringW szLibName;
+	std::map<CStringA, LibItem> Exports;
+	std::set<CStringA> szDllNameSet;
+	// YY-Thunks需要转发的别名
+	std::vector<CStringA> vecWeakAlias;
+	// 是否已经发生了修改
+	bool bUpdate = false;
+	bool bBase = false;
+
+	void ApplyWeakAlias(std::map<CStringA, bool>& _DefSymbols)
+	{
+		for (auto& _DefSymbols : _DefSymbols)
+		{
+			auto _iter = Exports.find(_DefSymbols.first);
+			if (_iter == Exports.end())
+				continue;
+
+			vecWeakAlias.push_back(_DefSymbols.first);
+			_DefSymbols.second = true;
+			bUpdate = true;
+			Exports.erase(_iter);
+		}
+	}
+
+	std::map<CStringA, CStringA> GetExports(WORD _Machine)
+	{
+		std::map<CStringA, CStringA> _Result;
+		for (const auto& _Export :Exports)
+		{
+			if (_Export.first.IsEmpty())
+				continue;
+
+			auto& _szDefData = _Result[CStringA(_Export.second.szDllName).MakeLower()];
+			if (_szDefData.IsEmpty())
+			{
+				_szDefData += "LIBRARY";
+				_szDefData += ' ';
+				_szDefData += _Export.second.szDllName;
+				_szDefData += '\n';
+				_szDefData += "EXPORTS";
+				_szDefData += '\n';
+			}
+
+			if (_Machine == IMAGE_FILE_MACHINE_I386 && _Export.first[0] == '_')
+			{
+				_szDefData.Append(_Export.first.GetString() + 1, _Export.first.GetLength() - 1);
+			}
+			else
+			{
+				_szDefData += _Export.first;
+			}
+			_szDefData += '\n';
+		}
+
+		return _Result;
+	}
+
+	// 将 NameType回写到Lib
+	HRESULT UpdateLibNameType(LPCWSTR _szLibFilePath)
+	{
+		auto Data = ReadFileData(_szLibFilePath);
+		if (Data.IsEmpty())
+			return E_FAIL;
+		bool bChange = false;
+		{
+			auto pData = Data.GetString();
+			if (memcmp(pData, IMAGE_ARCHIVE_START, IMAGE_ARCHIVE_START_SIZE) != 0)
+				return ERROR_BAD_FORMAT;
+
+			auto pHeader = (SectionHeader*)(pData + IMAGE_ARCHIVE_START_SIZE);
+			auto pHeader2 = pHeader->get_NextHeader();
+
+			auto pSecondSec = (SecondSec*)pHeader2->get_Data();
+
+			auto ObjNum = pSecondSec->get_ObjNum();
+			auto ObjOffsets = pSecondSec->get_ObjOffset();
+			auto SymbolNum = pSecondSec->get_SymbolNum();
+			auto StrTable = pSecondSec->get_StrTable();
+			auto SymbolIdx = pSecondSec->get_SymbolIdx();
+
+
+
+			auto SymbolName = StrTable;
+			for (int i = 0; i != SymbolNum; ++i, SymbolName += strlen(SymbolName) + 1)
+			{
+				auto ObjHeader = (SectionHeader*)(pData + ObjOffsets[SymbolIdx[i] - 1]);
+
+				auto pObjData = (IMPORT_OBJECT_HEADER*)ObjHeader->get_Data();
+				auto cbObjData = ObjHeader->get_Size();
+
+				if (pObjData->Sig1 != IMAGE_FILE_MACHINE_UNKNOWN || pObjData->Sig2 != IMPORT_OBJECT_HDR_SIG2)
+				{
+					continue;
+				}
+
+				auto _iter = Exports.find(SymbolName);
+
+				if (_iter != Exports.end())
+				{
+					if (_iter->second.NameType != pObjData->NameType)
+					{
+						pObjData->NameType = _iter->second.NameType;
+
+						if (_iter->second.NameType == IMPORT_OBJECT_ORDINAL)
+						{
+							pObjData->Ordinal = _iter->second.Ordinal;
+						}
+						bChange = true;
+					}
+				}
+			}
+		}
+
+		if (!bChange)
+			return S_OK;
+
+		return CreateFileByData(_szLibFilePath, Data, Data.GetLength());
+	}
+};
+
+Lib LoadLib(CStringW _szLibFilePath)
+{
+	Lib _Result;
+	auto _LibData = ReadFileData(_szLibFilePath);
+	if (_LibData.IsEmpty())
+		return _Result;
+
+	auto pData = _LibData.GetBuffer();
+
+	auto pHeader = (SectionHeader*)(pData + IMAGE_ARCHIVE_START_SIZE);
+	auto pHeader2 = pHeader->get_NextHeader();
+
+	auto pSecondSec = (SecondSec*)pHeader2->get_Data();
+
+	auto ObjNum = pSecondSec->get_ObjNum();
+	auto ObjOffsets = pSecondSec->get_ObjOffset();
+	auto SymbolNum = pSecondSec->get_SymbolNum();
+	auto StrTable = pSecondSec->get_StrTable();
+	auto SymbolIdx = pSecondSec->get_SymbolIdx();
+
+	bool _bFirst = true;
+
+	auto SymbolName = StrTable;
+	for (int i = 0; i != SymbolNum; ++i, SymbolName += strlen(SymbolName) + 1)
+	{
+		auto ObjHeader = (SectionHeader*)(pData + ObjOffsets[SymbolIdx[i] - 1]);
+
+		auto pObjData = (IMPORT_OBJECT_HEADER*)ObjHeader->get_Data();
+		auto cbObjData = ObjHeader->get_Size();
+
+		if (pObjData->Sig1 != IMAGE_FILE_MACHINE_UNKNOWN || pObjData->Sig2 != IMPORT_OBJECT_HDR_SIG2)
+		{
+			continue;
+		}
+
+		if (strnicmp(SymbolName, "__imp_", 6) == 0)
+		{
+			// 故意跳过 __imp_，因为这是必然携带的信息。
+			SymbolName += 6;
+		}
+		else
+		{
+			continue;
+		}
+
+		//
+		CStringA szDLlName;
+		if (ObjHeader->Name[0] == '/')
+		{
+			auto szProcName = (char*)pObjData + sizeof(IMPORT_OBJECT_HEADER);
+			szDLlName = szProcName + strlen(szProcName) + 1;
+		}
+		else
+		{
+			szDLlName.SetString((char*)ObjHeader->Name, _countof(ObjHeader->Name));
+			szDLlName.TrimRight();
+
+			szDLlName.ReleaseBuffer();
+
+			if (szDLlName[szDLlName.GetLength() - 1] == '/')
+				szDLlName.ReleaseBufferSetLength(szDLlName.GetLength() - 1);
+		}
+
+		szDLlName.MakeLower();
+		auto& _Item = _Result.Exports[SymbolName];
+
+		auto _iter = _Result.szDllNameSet.insert(szDLlName);
+
+		_Item.szDllName = *_iter.first;
+		_Item.NameType = (IMPORT_OBJECT_NAME_TYPE)pObjData->NameType;
+		if (_Item.NameType == IMPORT_OBJECT_NAME_TYPE::IMPORT_OBJECT_ORDINAL)
+		{
+			_Item.Ordinal = pObjData->Ordinal;
+		}
+	}
+
+
+	return _Result;
+}
+
+std::map<CStringW, Lib> LoadLibs(CStringW _szSDK_DirPath)
+{
+	if (_szSDK_DirPath[_szSDK_DirPath.GetLength() - 1] != L'\\')
+		_szSDK_DirPath += L'\\';
+
+	std::map<CStringW, Lib> _Result;
+
+	WIN32_FIND_DATAW _FindFileData;
+	auto _hFileFind = FindFirstFileW(_szSDK_DirPath + L"*.lib", &_FindFileData);
+	if (_hFileFind == INVALID_HANDLE_VALUE)
+	{
+		return _Result;
+	}
+
+	bool _bSuccess = false;
+
+	do
+	{
+		if (_FindFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		{
+			continue;
+		}
+
+		auto _Lib = LoadLib(_szSDK_DirPath + _FindFileData.cFileName);
+		if (_Lib.Exports.empty())
+			continue;
+
+		_Lib.szLibName = _FindFileData.cFileName;
+		_Result[CStringW(_FindFileData.cFileName).MakeLower()] = std::move(_Lib);
+
+	} while (FindNextFileW(_hFileFind, &_FindFileData));
+
+	FindClose(_hFileFind);
+	return _Result;
+}
+
+bool IsApiSet(_In_z_ const char* _szDllName)
+{
+	return _strnicmp(_szDllName, "api-ms-win-", 11) == 0 || _strnicmp(_szDllName, "ext-ms-win-", 11) == 0;
+}
+
+const LibItem* FindDllNameBySymbol(const std::map<CStringW, Lib>& _Libs, CStringA _szSymbolName, bool _bIgnoreApiSet = true)
+{
+	for (auto& _Lib : _Libs)
+	{
+		auto _iter = _Lib.second.Exports.find(_szSymbolName);
+		if (_iter == _Lib.second.Exports.end())
+			continue;
+
+		if (_bIgnoreApiSet && IsApiSet(_iter->second.szDllName))
+		{
+			continue;
+		}
+
+		return &_iter->second;
+	}
+
+	return nullptr;
+}
+
+HRESULT BuildYY_ThunksLibraries2(CStringW _szYY_ThunksFilePath, CStringW _szSDK_DirPath, CStringW _szOutputDirPath)
+{
+	const bool _bRemoveApiSet = g_bSupportApiSet == false;
+	std::map<CStringA, bool> _DefSymbols;
+	const auto _Machine = GetObjThunkSymbols(_szYY_ThunksFilePath, _DefSymbols);
+	if (_Machine == 0)
+		return E_FAIL;
+
+	if (_szSDK_DirPath[_szSDK_DirPath.GetLength() - 1] != L'\\')
+		_szSDK_DirPath += L'\\';
+
+	auto _LibsMap = LoadLibs(_szSDK_DirPath);
+
+	if (_LibsMap.empty())
+		return E_FAIL;
+
+	if (_szOutputDirPath[_szOutputDirPath.GetLength() - 1] != L'\\')
+		_szOutputDirPath += L'\\';
+
+	CreateRoot(_szOutputDirPath);
+
+	for (auto& _Lib : _LibsMap)
+	{
+		_Lib.second.ApplyWeakAlias(_DefSymbols);
+	}
+
+	// 这些是基础lib，还需要额外注入YY-Thunks
+	static const LPCWSTR s_szBaseNames[] =
+	{
+		L"kernel32.Lib",
+		L"OneCore.Lib", L"OneCore_apiset.Lib", L"OneCore_downlevel.Lib",
+		L"OneCoreUAP.Lib", L"OneCoreUAP_apiset.Lib", L"OneCoreUAP_downlevel.Lib",
+		// mincore_downlevel 这里面到底是干什么？
+		L"mincore.lib",
+	};
+
+	for (auto _szBaseName : s_szBaseNames)
+	{
+		auto _iter = _LibsMap.find(CStringW(_szBaseName).MakeLower());
+		if (_iter == _LibsMap.end())
+			continue;
+
+		// 设置需要额外注入Thunks
+		_iter->second.bBase = true;
+		_iter->second.bUpdate = true;
+
+		// 注入所有没有被weak的符号
+		for (auto& _DefSymbol : _DefSymbols)
+		{
+			if (_DefSymbol.second)
+				continue;
+
+			_iter->second.vecWeakAlias.push_back(_DefSymbol.first);
+		}
+	}
+
+	// 低版本系统不支持APISets，移除……
+	if (_bRemoveApiSet)
+	{
+		static const LPCWSTR s_szAPISetFixNames[] =
+		{
+			L"OneCore.Lib",
+			L"OneCoreUAP.Lib",
+			L"mincore.lib",
+		};
+
+		for (auto _szAPISetFixName : s_szAPISetFixNames)
+		{
+			auto _iter = _LibsMap.find(CStringW(_szAPISetFixName).MakeLower());
+			if (_iter == _LibsMap.end())
+				continue;
+
+			for (auto& _Export : _iter->second.Exports)
+			{
+				if (!IsApiSet(_Export.second.szDllName))
+				{
+					// 不是API Set，忽略
+					continue;
+				}
+
+				auto _pItem = FindDllNameBySymbol(_LibsMap, _Export.first, true);
+				if (!_pItem)
+					continue;
+
+				_Export.second = *_pItem;
+				_iter->second.bUpdate = true;
+			}
+		}
+	}
+	ParallelTaskRunner _TaskRunner(true);
+	SYSTEM_INFO _SystemInfo;
+	GetSystemInfo(&_SystemInfo);
+	_TaskRunner.SetParallelMaximum(_SystemInfo.dwNumberOfProcessors * 2);
+
+	TaskWait _TaskWait;
+	ParallelTaskRunner _TaskBuildLibWaitRunner(true);
+	_TaskBuildLibWaitRunner.SetParallelMaximum(_SystemInfo.dwNumberOfProcessors * 2);
+
+	HRESULT _hr = S_OK;
+	for (auto& _Lib : _LibsMap)
+	{
+		if (!_Lib.second.bUpdate)
+			continue;
+
+		if (FAILED(_hr))
+			break;
+
+		_TaskWait.Lock();
+		_TaskRunner.PostTask(
+			[&]()
+			{
+				RunOnExit(
+					[&]
+					{
+						_TaskWait.Unlock();
+					});
+				if (FAILED(_hr))
+					return _hr;
+
+				CStringW _szOutLibPath = _szOutputDirPath + _Lib.second.szLibName;
+				CStringW _sxInputLibPath = _szSDK_DirPath + _Lib.second.szLibName;
+
+				if (!CopyFileW(_sxInputLibPath, _szOutLibPath, FALSE))
+				{
+					_hr = __HRESULT_FROM_WIN32(GetLastError());
+					wprintf(L"%s 无法复制，hr = 0x%.8X\n", _sxInputLibPath.GetString(), _hr);
+					return _hr;
+				}
+
+				CStringW _szCommandLine;
+
+				if (_Lib.second.bBase)
+				{
+					_szCommandLine.Format(LR"(link /lib "%s" "%s")", _szOutLibPath.GetString(), _szYY_ThunksFilePath.GetString());
+					auto _lStatus = RunCmd(nullptr, _szCommandLine);
+					if (_lStatus != ERROR_SUCCESS)
+					{
+						_hr = __HRESULT_FROM_WIN32(_lStatus);
+						wprintf(L"%s 失败，hr = 0x%.8X\n", _szCommandLine.GetString(), _hr);
+						return _hr;
+					}
+				}
+
+				if(_Lib.second.vecWeakAlias.size())
+				{
+					CStringW _szWeakAliasObjRoot = _szOutLibPath + L"_WeakAlias";
+					CStringW _szWeakAliasData;
+					for (auto& _szWeak : _Lib.second.vecWeakAlias)
+					{
+						if (_szWeak.IsEmpty())
+							continue;
+
+						_szWeakAliasData += _szWeak;
+						_szWeakAliasData += L'=';
+
+						if (_Machine == IMAGE_FILE_MACHINE_I386 && _szWeak[0] == '_')
+						{
+							_szWeakAliasData += L'_';
+							_szWeakAliasData += g_szPrefix;
+							_szWeakAliasData += (_szWeak.GetString() + 1);
+						}
+						else
+						{
+							_szWeakAliasData += g_szPrefix;
+							_szWeakAliasData += _szWeak;
+						}
+
+						_szWeakAliasData += L' ';
+						_szWeakAliasData += L"NoPrefix";
+						_szWeakAliasData.AppendChar(L'\0');
+					}
+					_szWeakAliasData.AppendChar(L'\0');
+
+					{
+						const auto _bUsingPrefixWhenCreateWeak = g_UsingPrefixWhenCreateWeak;
+						g_UsingPrefixWhenCreateWeak = false;
+						auto _lStatus = CreateWeakObjs(_Machine, _szWeakAliasData, _szWeakAliasObjRoot);
+						g_UsingPrefixWhenCreateWeak = _bUsingPrefixWhenCreateWeak;
+
+						if (_lStatus != ERROR_SUCCESS)
+						{
+							_hr = __HRESULT_FROM_WIN32(_lStatus);
+							wprintf(L"%s 失败，hr = 0x%.8X\n", _szWeakAliasObjRoot.GetString(), _hr);
+							return _hr;
+						}
+					}
+
+					_szCommandLine.Format(LR"(link /lib "%s" "%s\*")", _szOutLibPath.GetString(), _szWeakAliasObjRoot.GetString());
+					auto _lStatus = RunCmd(nullptr, _szCommandLine);
+					if (_lStatus != ERROR_SUCCESS)
+					{
+						_hr = __HRESULT_FROM_WIN32(_lStatus);
+						wprintf(L"%s 失败，hr = 0x%.8X\n", _szCommandLine.GetString(), _hr);
+						return _hr;
+					}
+
+					DeleteDirectory(_szWeakAliasObjRoot);
+				}
+
+				// 删除所有Dll函数导入
+				for (auto _iter = _Lib.second.szDllNameSet.begin(); ;++_iter)
+				{
+					if (_szCommandLine.GetLength() > 8000 || _iter == _Lib.second.szDllNameSet.end())
+					{
+						if (_szCommandLine.GetLength())
+						{
+							auto _lStatus = RunCmd(nullptr, _szCommandLine);
+							if (_lStatus != ERROR_SUCCESS)
+							{
+								_hr = __HRESULT_FROM_WIN32(_lStatus);
+								wprintf(L"%s 失败，hr = 0x%.8X\n", _szCommandLine.GetString(), _hr);
+								return _hr;
+							}
+							_szCommandLine.Empty();
+						}
+
+						if (_iter == _Lib.second.szDllNameSet.end())
+							break;
+					}
+
+					if (_szCommandLine.IsEmpty())
+					{
+						_szCommandLine.Format(LR"(link /lib "%s" /remove:%hs)", _szOutLibPath.GetString(), _iter->GetString());
+					}
+					else
+					{
+						_szCommandLine.AppendFormat(L" /remove:%hs", _iter->GetString());
+					}
+				}
+
+				// 导入所有修正后的函数实现
+				auto _Exports = _Lib.second.GetExports(_Machine);
+				auto _cExports =  _Exports.size();
+				TaskWait _TaskBuildLibWait;
+
+				for (auto& _ExportDef : _Exports)
+				{
+					auto _fnBuildLib = [&_hr](const CString& _szOutLibPath, const decltype(_ExportDef)& _ExportDef)
+						{
+							auto _szTmpDef = _szOutLibPath + CStringW(_ExportDef.first) + L".def";
+							auto _szTmpDefLib = _szTmpDef + L".lib";
+
+							auto _lStatus = WriteFileData(_szTmpDef, _ExportDef.second.GetString(), _ExportDef.second.GetLength());
+							if (_lStatus != ERROR_SUCCESS)
+							{
+								_hr = __HRESULT_FROM_WIN32(_lStatus);
+								wprintf(L"%s 失败，hr = 0x%.8X\n", _szTmpDef.GetString(), _hr);
+								return _hr;
+							}
+
+							CStringW _szCommandLine;
+							_szCommandLine.Format(LR"(link /lib /DEF:"%s" /Out:"%s")", _szTmpDef.GetString(), _szTmpDefLib.GetString());
+							_lStatus = RunCmd(nullptr, _szCommandLine);
+							if (_lStatus != ERROR_SUCCESS)
+							{
+								_hr = __HRESULT_FROM_WIN32(_lStatus);
+								wprintf(L"%s 失败，hr = 0x%.8X\n", _szCommandLine.GetString(), _hr);
+								return _hr;
+							}
+							DeleteFileW(_szTmpDef);
+							DeleteFileW(_szTmpDef + L".exp");
+
+							return S_OK;
+						};
+
+					if (--_cExports == 0)
+					{
+						_fnBuildLib(_szOutLibPath, _ExportDef);
+					}
+					else
+					{
+						_TaskBuildLibWait.Lock();
+						_TaskBuildLibWaitRunner.PostTask(
+							[&]()
+							{
+								RunOnExit(
+									[&]
+									{
+										_TaskBuildLibWait.Unlock();
+									});
+
+								if (FAILED(_hr))
+									return _hr;
+
+								return _fnBuildLib(_szOutLibPath, _ExportDef);
+							});
+					}
+				}
+
+				_TaskBuildLibWait.Wait();
+				_szCommandLine.Empty();
+
+				for (auto _iter = _Exports.begin();;++_iter)
+				{
+					if (_szCommandLine.GetLength() > 8000 || _iter == _Exports.end())
+					{
+						if (_szCommandLine.GetLength())
+						{
+							auto _lStatus = RunCmd(nullptr, _szCommandLine);
+							if (_lStatus != ERROR_SUCCESS)
+							{
+								_hr = __HRESULT_FROM_WIN32(_lStatus);
+								wprintf(L"%s 失败，hr = 0x%.8X\n", _szCommandLine.GetString(), _hr);
+								return _hr;
+							}
+							_szCommandLine.Empty();
+						}
+						if (_iter == _Exports.end())
+							break;
+					}
+
+					auto _szTmpDefLib = _szOutLibPath + CStringW(_iter->first) + L".def" + L".lib";
+
+					if (_szCommandLine.IsEmpty())
+					{
+						_szCommandLine.Format(LR"(link /lib "%s" "%s")", _szOutLibPath.GetString(), _szTmpDefLib.GetString());
+					}
+					else
+					{
+						_szCommandLine.AppendFormat(LR"( "%s")", _szTmpDefLib.GetString());
+					}
+				}
+
+				for (auto& _Export : _Exports)
+				{
+					DeleteFileW(_szOutLibPath + CStringW(_Export.first) + L".def.lib");
+				}
+
+				_hr = _Lib.second.UpdateLibNameType(_szOutLibPath);
+				if (FAILED(_hr))
+				{
+					wprintf(L"UpdateLibNameType %s 失败，hr = 0x%.8X\n", _szCommandLine.GetString(), _hr);
+					return _hr;
+				}
+
+				wprintf(L"成功生成 %s\n", _szOutLibPath.GetString());
+
+				return S_OK;
+			});
+
+	}
+
+	_TaskWait.Wait();
+
+	if(SUCCEEDED(_hr))
+		wprintf(L"操作完成\n");
+	return _hr;
 }
