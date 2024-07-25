@@ -403,8 +403,8 @@ LSTATUS CreateWeakObj(WORD Machine, LPCWSTR Names, std::string& Buffer)
 		{
 			auto& Symbol = TTTT[i];
 
-			// 过滤纯声明
-			if (Symbol.Type == IMAGE_SYM_TYPE_NULL && Symbol.SectionNumber == 0 && Symbol.StorageClass == IMAGE_SYM_CLASS_EXTERNAL)
+			// 过滤没有实际实现的
+			if (Symbol.SectionNumber == 0 && Symbol.StorageClass == IMAGE_SYM_CLASS_EXTERNAL)
 				continue;
 			//是一个声明
 			if (Symbol.StorageClass == IMAGE_SYM_CLASS_EXTERNAL)
@@ -2678,7 +2678,7 @@ WORD GetObjThunkSymbols(CStringW _szYY_ThunksFilePath, std::map<CStringA, bool>&
 			}
 
 			// 过滤掉纯声明
-			if (Symbol.Type == IMAGE_SYM_TYPE_NULL && Symbol.SectionNumber == 0 && Symbol.StorageClass == IMAGE_SYM_CLASS_EXTERNAL)
+			if (Symbol.SectionNumber == 0 && Symbol.StorageClass == IMAGE_SYM_CLASS_EXTERNAL)
 				continue;
 
 			if (_szName.IsEmpty())
